@@ -1,6 +1,7 @@
 """
 데이터베이스 모델 및 연결 관리
 """
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -15,8 +16,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
-import config
 
 Base = declarative_base()
 

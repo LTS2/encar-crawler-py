@@ -1,10 +1,9 @@
 """
 엔카 크롤러 메인 실행 파일
 """
+
 import argparse
 import asyncio
-import sys
-from datetime import datetime
 
 from rich.console import Console
 from rich.panel import Panel

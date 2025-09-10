@@ -1,6 +1,7 @@
 """
 wrp_price 영역 상세 분석
 """
+
 import asyncio
 
 from playwright.async_api import async_playwright
@@ -40,7 +41,7 @@ async def analyze_wrp_price():
                 select_class = await select.get_attribute("class")
                 options = await select.query_selector_all("option")
 
-                print(f"\nSelect {i+1}:")
+                print(f"\nSelect {i + 1}:")
                 print(f"  ID: {select_id}")
                 print(f"  Name: {select_name}")
                 print(f"  Class: {select_class}")
@@ -51,7 +52,7 @@ async def analyze_wrp_price():
                         option_text = await option.inner_text()
                         option_value = await option.get_attribute("value")
                         print(
-                            f"    옵션 {j+1}: text='{option_text}', value='{option_value}'"
+                            f"    옵션 {j + 1}: text='{option_text}', value='{option_value}'"
                         )
 
             # wrp_price 내부의 input 요소 찾기
@@ -64,7 +65,7 @@ async def analyze_wrp_price():
                 input_id = await input_elem.get_attribute("id")
                 input_name = await input_elem.get_attribute("name")
                 print(
-                    f"  Input {i+1}: type='{input_type}', id='{input_id}', name='{input_name}'"
+                    f"  Input {i + 1}: type='{input_type}', id='{input_id}', name='{input_name}'"
                 )
 
             # wrp_price 내부의 버튼 찾기
@@ -77,7 +78,9 @@ async def analyze_wrp_price():
             for i, button in enumerate(buttons[:5]):
                 button_text = await button.inner_text()
                 onclick = await button.get_attribute("onclick")
-                print(f"  버튼 {i+1}: text='{button_text.strip()}', onclick='{onclick}'")
+                print(
+                    f"  버튼 {i + 1}: text='{button_text.strip()}', onclick='{onclick}'"
+                )
 
             # HTML 구조 일부 출력
             print("\n.wrp_price HTML 구조 (일부):")
@@ -94,7 +97,7 @@ async def analyze_wrp_price():
             for i, select in enumerate(all_selects[:5]):
                 select_id = await select.get_attribute("id")
                 select_name = await select.get_attribute("name")
-                print(f"  Select {i+1}: id='{select_id}', name='{select_name}'")
+                print(f"  Select {i + 1}: id='{select_id}', name='{select_name}'")
 
         # 페이지 스크린샷
         await page.screenshot(path="wrp_price_analysis.png", full_page=True)

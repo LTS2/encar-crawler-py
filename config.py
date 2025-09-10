@@ -1,6 +1,7 @@
 """
 엔카 크롤링 설정 파일
 """
+
 import os
 
 from dotenv import load_dotenv

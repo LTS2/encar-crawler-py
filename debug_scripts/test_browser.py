@@ -1,6 +1,7 @@
 """
 브라우저 테스트 스크립트
 """
+
 import asyncio
 
 from playwright.async_api import async_playwright

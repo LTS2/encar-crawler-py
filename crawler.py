@@ -1,6 +1,7 @@
 """
 엔카 시세 크롤러 - Playwright 기반
 """
+
 import asyncio
 import hashlib
 import time
@@ -46,6 +47,7 @@ class EncarCrawler:
             locale="ko-KR",
             timezone_id="Asia/Seoul",
         )
+
         await self.context.set_extra_http_headers(
             {"Accept-Language": "ko-KR,ko;q=0.9", "Upgrade-Insecure-Requests": "1"}
         )
@@ -502,12 +504,12 @@ class EncarCrawler:
                     await self.page.wait_for_timeout(200)
                     return True
                 console.print(
-                    f"[yellow]옵션 미선택, 재시도 {attempt+1}/{max_retries}: {select_id} - {text}({value})[/yellow]"
+                    f"[yellow]옵션 미선택, 재시도 {attempt + 1}/{max_retries}: {select_id} - {text}({value})[/yellow]"
                 )
                 await self.page.wait_for_timeout(300)
             except Exception as e:
                 console.print(
-                    f"[yellow]옵션 선택 재시도 {attempt+1}/{max_retries}: {select_id} - {text}({value}) => {e}[/yellow]"
+                    f"[yellow]옵션 선택 재시도 {attempt + 1}/{max_retries}: {select_id} - {text}({value}) => {e}[/yellow]"
                 )
                 await self.page.wait_for_timeout(300)
         return False
@@ -817,7 +819,7 @@ class EncarCrawler:
             self.crawling_log.status = "SUCCESS" if failed_count == 0 else "PARTIAL"
             self.session.commit()
 
-            console.print(f"\n[bold cyan]크롤링 완료![/bold cyan]")
+            console.print("\n[bold cyan]크롤링 완료![/bold cyan]")
             console.print(f"총 조합: {total_combinations}")
             console.print(f"성공: {success_count}")
             console.print(f"실패: {failed_count}")

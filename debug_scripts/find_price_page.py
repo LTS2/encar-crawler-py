@@ -1,6 +1,7 @@
 """
 엔카 시세 페이지 찾기 스크립트
 """
+
 import asyncio
 
 from playwright.async_api import async_playwright
@@ -44,7 +45,7 @@ async def find_price_page():
                     for i, link in enumerate(links[:3]):  # 처음 3개만
                         text = await link.inner_text()
                         href = await link.get_attribute("href")
-                        print(f"  {i+1}. 텍스트: '{text}', 링크: {href}")
+                        print(f"  {i + 1}. 텍스트: '{text}', 링크: {href}")
             except:
                 pass
 
@@ -84,10 +85,10 @@ async def find_price_page():
             print(f"  Select 요소: {len(select_elements)}개")
 
             if len(select_elements) > 3:
-                print(f"  ✓ 이 페이지가 시세 페이지일 가능성이 높습니다!")
+                print("  ✓ 이 페이지가 시세 페이지일 가능성이 높습니다!")
 
                 # 스크린샷 저장
-                await page.screenshot(path=f'test_{url.split("/")[-1]}.png')
+                await page.screenshot(path=f"test_{url.split('/')[-1]}.png")
 
                 # Select 요소 ID 확인
                 for i, select in enumerate(select_elements[:6]):
@@ -95,7 +96,7 @@ async def find_price_page():
                     select_name = await select.get_attribute("name")
                     if select_id or select_name:
                         print(
-                            f"    Select {i+1}: id='{select_id}', name='{select_name}'"
+                            f"    Select {i + 1}: id='{select_id}', name='{select_name}'"
                         )
 
         print("\n\n30초 후 브라우저가 종료됩니다. 수동으로 시세 페이지를 찾아보세요...")

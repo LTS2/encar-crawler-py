@@ -1,6 +1,7 @@
 """
 메인 페이지에서 시세 페이지로 네비게이션
 """
+
 import asyncio
 
 from playwright.async_api import async_playwright
@@ -69,7 +70,7 @@ async def navigate_to_price():
                 try:
                     tab_text = await tab.inner_text()
                     if tab_text.strip():
-                        print(f"  탭 {i+1}: {tab_text.strip()}")
+                        print(f"  탭 {i + 1}: {tab_text.strip()}")
                 except:
                     pass
 
@@ -101,7 +102,7 @@ async def navigate_to_price():
                 select_name = await select.get_attribute("name")
                 options = await select.query_selector_all("option")
                 print(
-                    f"  {i+1}. id='{select_id}', name='{select_name}', options={len(options)}개"
+                    f"  {i + 1}. id='{select_id}', name='{select_name}', options={len(options)}개"
                 )
 
                 # 옵션 내용 확인

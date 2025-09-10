@@ -1,8 +1,8 @@
 """
 엔카 시세 페이지 상세 분석
 """
+
 import asyncio
-import json
 
 from playwright.async_api import async_playwright
 
@@ -37,7 +37,7 @@ async def analyze_price_page():
             for i, iframe in enumerate(iframes):
                 src = await iframe.get_attribute("src")
                 name = await iframe.get_attribute("name")
-                print(f"  iframe {i+1}: name='{name}', src='{src}'")
+                print(f"  iframe {i + 1}: name='{name}', src='{src}'")
 
         # 2. 모든 select 요소 찾기
         print("\nSelect 요소 검색:")
@@ -52,7 +52,7 @@ async def analyze_price_page():
             select_class = await select.get_attribute("class")
             options_count = len(await select.query_selector_all("option"))
             print(
-                f"  {i+1}. id='{select_id}', name='{select_name}', class='{select_class}', options={options_count}"
+                f"  {i + 1}. id='{select_id}', name='{select_name}', class='{select_class}', options={options_count}"
             )
 
         # 3. 동적 로딩 요소 확인
@@ -131,7 +131,7 @@ async def analyze_price_page():
 
         for i, tab in enumerate(tabs[:5]):
             text = await tab.inner_text()
-            print(f"  {i+1}. {text.strip()[:30]}")
+            print(f"  {i + 1}. {text.strip()[:30]}")
 
         # 6. 스크린샷 저장
         await page.screenshot(path="price_page_analysis.png", full_page=True)
