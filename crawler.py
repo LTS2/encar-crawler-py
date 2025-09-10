@@ -1,12 +1,13 @@
 """
 엔카 시세 크롤러 - Playwright 기반
+요구사항에 맞게 수정된 버전
 """
 
 import asyncio
 import hashlib
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from playwright.async_api import Page, async_playwright
 from rich.console import Console
@@ -28,6 +29,11 @@ class EncarCrawler:
         self.playwright = None
         self.session = get_session()
         self.crawling_log = None
+
+        # 크롤링 상태 관리
+        self.visited_combinations: Set[str] = set()
+        self.current_path: List[Dict] = []  # 현재 선택된 옵션 경로
+        self.crawled_data: List[Dict] = []  # 크롤링된 데이터 임시 저장
 
     async def initialize(self):
         """브라우저 초기화"""
@@ -59,7 +65,7 @@ class EncarCrawler:
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             // languages 지정
             Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko'] });
-            // platform 지정
+            // platform 지정제가
             Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
             // Chrome 객체 존재 보장
             window.chrome = window.chrome || {};
@@ -311,90 +317,43 @@ class EncarCrawler:
         return True
 
     async def navigate_to_price_page(self):
-        """엔카 시세 페이지로 이동 (세션 프라임 → '시세' 메뉴 클릭 → 가이드 레이어 닫기 → 검증)"""
+        """엔카 시세 페이지로 이동 및 팝업 처리"""
         console.print("[cyan]엔카 시세 페이지로 이동 중...[/cyan]")
 
-        # 1) 세션 프라임: 인덱스 페이지를 먼저 열어 쿠키 확보
-        idx_url = "https://www.encar.com/index.do"
-        await self.page.goto(idx_url, wait_until="domcontentloaded", timeout=60000)
+        # 1) 메인 페이지로 이동
+        await self.page.goto(
+            "https://www.encar.com/index.do",
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
         await self.dom.wait_for_timeout(1000)
 
-        # 2) '시세' 메뉴를 클릭하여 내부 네비게이션으로 진입
-        price_url = config.ENCAR_URL  # /pr/pr_index.do
-        selectors = [
-            "ul.gnb.right a[href='/pr/pr_index.do']",
-            "a[href*='/pr/pr_index.do']",
-            "a:has-text('시세')",
-            "a:has-text('내차시세')",
-            "a:has-text('가격')",
-        ]
-        clicked = False
-        for sel in selectors:
-            try:
-                await self.dom.wait_for_selector(sel, timeout=2500)
-                await self.dom.click(sel)
-                clicked = True
-                break
-            except Exception:
-                continue
-
-        if not clicked:
-            # 폴백: referer 를 index.do 로 주고 직접 이동
+        # 2) 시세 메뉴 클릭
+        try:
+            # 시세 메뉴 찾기 및 클릭
+            price_link = await self.dom.wait_for_selector(
+                "a[href='/pr/pr_index.do']", timeout=5000
+            )
+            await price_link.click()
+            await self.dom.wait_for_timeout(2000)
+        except Exception as e:
+            console.print(f"[yellow]시세 메뉴 클릭 실패, 직접 이동: {e}[/yellow]")
             await self.page.goto(
-                price_url, wait_until="domcontentloaded", referer=idx_url, timeout=60000
+                "https://www.encar.com/pr/pr_index.do",
+                wait_until="domcontentloaded",
+                timeout=60000,
             )
 
-        # 프레임 전환 시도
-        await self._switch_to_price_frame_if_exists()
-
-        await self.dom.wait_for_timeout(800)
-
-        # 최종 URL/타이틀 확인
-        current_url = self.page.url
-        title = await self.page.title()
-        console.print(f"[yellow]현재 URL: {current_url}[/yellow]")
-        console.print(f"[yellow]페이지 타이틀: {title}[/yellow]")
-
-        # 진입 시 가이드 레이어가 있으면 닫는다
+        # 3) 가이드 팝업 처리
         await self.dismiss_price_guide()
 
-        # 4) 가격 페이지 핵심 셀렉터 검증
-        try:
-            await self.dom.wait_for_selector(
-                "li.op_dep1 .select.ui_select", timeout=5000
-            )
-        except Exception:
-            await self.page.screenshot(path="debug_page.png", full_page=True)
-            raise RuntimeError("가격 페이지 접근 실패: li.op_dep1 을 찾지 못함 (가드/리다이렉트 가능성)")
+        # 4) 페이지 로딩 대기 및 검증
+        await self.dom.wait_for_selector("li.op_dep1", timeout=10000)
+        console.print("[green]시세 페이지 로딩 완료[/green]")
 
-        # 추가 셀렉터(존재 시) 로그: op_dep1~6 및 연료
-        ids = [
-            "op_dep1",
-            "op_dep2",
-            "op_dep3",
-            "op_dep4",
-            "op_dep5",
-            "op_dep6",
-            "op_fuel",
-            "fuel",
-        ]
-        for sid in ids:
-            try:
-                el = await self.dom.query_selector(f"li.{sid}")
-                if not el and sid in ("fuel", "op_fuel"):
-                    el = await self.dom.query_selector(
-                        'li .select.ui_select[data-name="fuel"]'
-                    )
-                if el:
-                    console.print(f"[green]존재: {sid}[/green]")
-                else:
-                    console.print(f"[yellow]없음: {sid}[/yellow]")
-            except Exception as _:
-                pass
-
-        # 디버깅용 스크린샷
-        await self.page.screenshot(path="debug_page.png", full_page=True)
-        console.print("[green]스크린샷 저장: debug_page.png[/green]")
+        # 5) 디버깅용 스크린샷
+        # await self.page.screenshot(path="debug_page.png", full_page=True)
+        # console.print("[green]스크린샷 저장: debug_page.png[/green]")
 
     async def wait_for_element_change(
         self,
@@ -638,7 +597,7 @@ class EncarCrawler:
             return None, False, str(e)
 
     async def crawl_all_combinations(self):
-        """모든 옵션 조합 크롤링"""
+        """요구사항에 맞는 모든 옵션 조합 크롤링"""
         start_time = datetime.now()
         total_combinations = 0
         success_count = 0
@@ -652,178 +611,579 @@ class EncarCrawler:
         try:
             await self.navigate_to_price_page()
 
-            # 1. 제조사 목록 가져오기
-            manufacturers = await self.get_select_options("op_dep1")
-            console.print(f"[green]제조사 {len(manufacturers)}개 발견[/green]")
+            # 1단계: op_dep1 (제조사)부터 시작
+            await self._crawl_from_level(1)
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                for manufacturer in manufacturers:
-                    task = progress.add_task(
-                        f"[cyan]{manufacturer['text']} 크롤링 중...[/cyan]", total=None
-                    )
+            # 역순으로 방문하지 않은 옵션들 체크
+            for level in range(6, 0, -1):
+                await self._check_unvisited_options(level)
 
-                    # 제조사 선택
-                    if not await self.select_option_with_retry(
-                        "op_dep1", manufacturer["value"], manufacturer["text"]
-                    ):
-                        continue
-
-                    # 2. 모델 목록 가져오기
-                    models = await self.get_select_options("op_dep2")
-
-                    for model in models:
-                        if not await self.select_option_with_retry(
-                            "op_dep2", model["value"], model["text"]
-                        ):
-                            continue
-
-                        # 3. 세부모델 목록 가져오기
-                        detailed_models = await self.get_select_options("op_dep3")
-
-                        for detailed_model in detailed_models:
-                            if not await self.select_option_with_retry(
-                                "op_dep3",
-                                detailed_model["value"],
-                                detailed_model["text"],
-                            ):
-                                continue
-
-                            # 4. 연식 목록 가져오기
-                            years = await self.get_select_options("op_dep4")
-
-                            for year in years:
-                                if not await self.select_option_with_retry(
-                                    "op_dep4", year["value"], year["text"]
-                                ):
-                                    continue
-
-                                # 5. 연료 옵션 처리
-                                fuel_options = await self.get_fuel_options()
-
-                                for fuel in fuel_options:
-                                    if (
-                                        fuel_options
-                                        and not await self.select_fuel_option(
-                                            fuel["value"]
-                                        )
-                                    ):
-                                        continue
-
-                                    # 6. 등급 목록 가져오기
-                                    grades = await self.get_select_options("op_dep5")
-
-                                    for grade in grades:
-                                        if not await self.select_option_with_retry(
-                                            "op_dep5", grade["value"], grade["text"]
-                                        ):
-                                            continue
-
-                                        # 7. 세부등급 목록 가져오기
-                                        detailed_grades = await self.get_select_options(
-                                            "op_dep6"
-                                        )
-
-                                        for detailed_grade in detailed_grades:
-                                            total_combinations += 1
-
-                                            if not await self.select_option_with_retry(
-                                                "op_dep6",
-                                                detailed_grade["value"],
-                                                detailed_grade["text"],
-                                            ):
-                                                failed_count += 1
-                                                continue
-
-                                            # 가격 정보 가져오기
-                                            (
-                                                price,
-                                                is_available,
-                                                message,
-                                            ) = await self.get_price_info()
-
-                                            # 옵션 조합 해시 생성
-                                            option_string = f"{manufacturer['value']}_{model['value']}_{detailed_model['value']}_{year['value']}_{fuel.get('value', '')}_{grade['value']}_{detailed_grade['value']}"
-                                            options_hash = hashlib.md5(
-                                                option_string.encode()
-                                            ).hexdigest()
-
-                                            # 데이터베이스 저장
-                                            try:
-                                                car_price = CarPrice(
-                                                    manufacturer=manufacturer["text"],
-                                                    model=model["text"],
-                                                    detailed_model=detailed_model[
-                                                        "text"
-                                                    ],
-                                                    year=year["text"],
-                                                    fuel_type=fuel.get("text", ""),
-                                                    grade=grade["text"],
-                                                    detailed_grade=detailed_grade[
-                                                        "text"
-                                                    ],
-                                                    price=price,
-                                                    is_price_available=is_available,
-                                                    price_message=message,
-                                                    options_hash=options_hash,
-                                                    manufacturer_code=manufacturer[
-                                                        "value"
-                                                    ],
-                                                    model_code=model["value"],
-                                                    detailed_model_code=detailed_model[
-                                                        "value"
-                                                    ],
-                                                    year_code=year["value"],
-                                                    fuel_code=fuel.get("value", ""),
-                                                    grade_code=grade["value"],
-                                                    detailed_grade_code=detailed_grade[
-                                                        "value"
-                                                    ],
-                                                )
-
-                                                self.session.add(car_price)
-                                                self.session.commit()
-                                                success_count += 1
-
-                                                status_text = f"✓ {manufacturer['text']} {model['text']} {year['text']}"
-                                                if price:
-                                                    console.print(
-                                                        f"[green]{status_text} - {price:,.0f}만원[/green]"
-                                                    )
-                                                else:
-                                                    console.print(
-                                                        f"[yellow]{status_text} - 시세 미제공[/yellow]"
-                                                    )
-
-                                            except Exception as e:
-                                                failed_count += 1
-                                                console.print(
-                                                    f"[red]DB 저장 실패: {e}[/red]"
-                                                )
-                                                self.session.rollback()
-
-                    progress.remove_task(task)
+            # 크롤링된 데이터를 DB에 저장
+            success_count, failed_count = await self._save_crawled_data()
 
         except Exception as e:
             console.print(f"[red]크롤링 중 오류 발생: {e}[/red]")
+            import traceback
+
+            console.print(f"[red]{traceback.format_exc()}[/red]")
 
         finally:
             # 크롤링 로그 업데이트
             self.crawling_log.ended_at = datetime.now()
-            self.crawling_log.total_combinations = total_combinations
+            self.crawling_log.total_combinations = len(self.crawled_data)
             self.crawling_log.success_count = success_count
             self.crawling_log.failed_count = failed_count
             self.crawling_log.status = "SUCCESS" if failed_count == 0 else "PARTIAL"
             self.session.commit()
 
             console.print("\n[bold cyan]크롤링 완료![/bold cyan]")
-            console.print(f"총 조합: {total_combinations}")
+            console.print(f"총 조합: {len(self.crawled_data)}")
             console.print(f"성공: {success_count}")
             console.print(f"실패: {failed_count}")
             console.print(f"소요 시간: {datetime.now() - start_time}")
+
+    async def _crawl_from_level(self, start_level: int):
+        """특정 레벨부터 크롤링 시작"""
+        console.print(f"[cyan]레벨 {start_level}부터 크롤링 시작[/cyan]")
+
+        # op_dep1부터 시작
+        if start_level == 1:
+            await self._crawl_manufacturers()
+
+    async def _crawl_manufacturers(self):
+        """제조사(op_dep1) 크롤링"""
+        console.print("[cyan]제조사 크롤링 시작[/cyan]")
+
+        # 제조사 옵션 가져오기
+        manufacturers = await self._get_options("op_dep1")
+        console.print(f"[green]제조사 {len(manufacturers)}개 발견[/green]")
+
+        for i, manufacturer in enumerate(manufacturers):
+            if i == 0:  # 첫 번째는 "제조사" 플레이스홀더
+                continue
+
+            # 시세 미제공인 경우 건너뛰기
+            if "시세 미제공" in manufacturer.get("price_text", ""):
+                console.print(f"[yellow]건너뛰기: {manufacturer['text']} - 시세 미제공[/yellow]")
+                continue
+
+            console.print(f"[cyan]제조사 선택 시도: {manufacturer['text']}[/cyan]")
+            # 제조사 선택
+            if await self._select_option("op_dep1", manufacturer):
+                self.current_path = [manufacturer]
+                console.print(f"[green]제조사 선택 완료: {manufacturer['text']}[/green]")
+                # 제조사 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_models()
+            else:
+                console.print(f"[red]제조사 선택 실패: {manufacturer['text']}[/red]")
+
+    async def _crawl_models(self):
+        """모델(op_dep2) 크롤링"""
+        console.print("[cyan]모델 크롤링 시작[/cyan]")
+
+        models = await self._get_options("op_dep2")
+        console.print(f"[green]모델 {len(models)}개 발견[/green]")
+
+        for model in models:
+            if "시세 미제공" in model.get("price_text", ""):
+                console.print(f"[yellow]건너뛰기: {model['text']} - 시세 미제공[/yellow]")
+                continue
+
+            if await self._select_option("op_dep2", model):
+                self.current_path = self.current_path[:1] + [model]
+                # 모델 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_detailed_models()
+
+    async def _crawl_detailed_models(self):
+        """세부모델(op_dep3) 크롤링"""
+        console.print("[cyan]세부모델 크롤링 시작[/cyan]")
+
+        detailed_models = await self._get_options("op_dep3")
+        console.print(f"[green]세부모델 {len(detailed_models)}개 발견[/green]")
+
+        for detailed_model in detailed_models:
+            if "시세 미제공" in detailed_model.get("price_text", ""):
+                console.print(
+                    f"[yellow]건너뛰기: {detailed_model['text']} - 시세 미제공[/yellow]"
+                )
+                continue
+
+            if await self._select_option("op_dep3", detailed_model):
+                self.current_path = self.current_path[:2] + [detailed_model]
+                # 세부모델 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_years()
+
+    async def _crawl_years(self):
+        """연식(op_dep4) 크롤링"""
+        console.print("[cyan]연식 크롤링 시작[/cyan]")
+
+        years = await self._get_options("op_dep4")
+        console.print(f"[green]연식 {len(years)}개 발견[/green]")
+
+        for year in years:
+            if "시세 미제공" in year.get("price_text", ""):
+                console.print(f"[yellow]건너뛰기: {year['text']} - 시세 미제공[/yellow]")
+                continue
+
+            if await self._select_option("op_dep4", year):
+                self.current_path = self.current_path[:3] + [year]
+                # 연식 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_fuel_options()
+
+    async def _crawl_fuel_options(self):
+        """연료 옵션 크롤링"""
+        console.print("[cyan]연료 옵션 크롤링 시작[/cyan]")
+
+        fuel_options = await self._get_fuel_options()
+        console.print(f"[green]연료 옵션 {len(fuel_options)}개 발견[/green]")
+
+        for fuel in fuel_options:
+            if await self._select_fuel_option(fuel):
+                self.current_path = self.current_path[:4] + [fuel]
+                # 연료 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_grades()
+
+    async def _crawl_grades(self):
+        """등급(op_dep5) 크롤링"""
+        console.print("[cyan]등급 크롤링 시작[/cyan]")
+
+        grades = await self._get_options("op_dep5")
+        console.print(f"[green]등급 {len(grades)}개 발견[/green]")
+
+        for grade in grades:
+            if "시세 미제공" in grade.get("price_text", ""):
+                console.print(f"[yellow]건너뛰기: {grade['text']} - 시세 미제공[/yellow]")
+                continue
+
+            if await self._select_option("op_dep5", grade):
+                self.current_path = self.current_path[:5] + [grade]
+                # 등급 선택 후 추가 대기
+                await self.dom.wait_for_timeout(1500)
+                await self._crawl_detailed_grades()
+
+    async def _crawl_detailed_grades(self):
+        """세부등급(op_dep6) 크롤링 - 요구사항의 핵심"""
+        console.print("[cyan]세부등급 크롤링 시작[/cyan]")
+
+        detailed_grades = await self._get_options("op_dep6")
+        console.print(f"[green]세부등급 {len(detailed_grades)}개 발견[/green]")
+
+        # op_dep6의 모든 옵션을 크롤링 (요구사항에 따라)
+        for detailed_grade in detailed_grades:
+            # 현재까지의 경로 + 세부등급으로 최종 데이터 생성
+            final_path = self.current_path + [detailed_grade]
+
+            # 가격 정보 가져오기
+            price, is_available, message = await self._get_price_info()
+
+            # 데이터 저장
+            car_data = self._create_car_data(final_path, price, is_available, message)
+            self.crawled_data.append(car_data)
+
+            # 로그 출력
+            status_text = f"✓ {' '.join([item['text'] for item in final_path])}"
+            if price:
+                console.print(f"[green]{status_text} - {price:,.0f}만원[/green]")
+            else:
+                console.print(f"[yellow]{status_text} - 시세 미제공[/yellow]")
+
+    async def _check_unvisited_options(self, level: int):
+        """특정 레벨에서 방문하지 않은 옵션들 체크"""
+        console.print(f"[cyan]레벨 {level}에서 방문하지 않은 옵션 체크[/cyan]")
+        # 구현 예정
+
+    async def _get_options(self, dep_class: str) -> List[Dict]:
+        """op_dep* 옵션들을 가져오기"""
+        try:
+            # 드롭다운 열기
+            await self._open_dropdown(dep_class)
+
+            # 옵션들 파싱
+            options = await self.dom.evaluate(
+                f"""
+                () => {{
+                    const li = document.querySelector('li.{dep_class}');
+                    if (!li) return [];
+
+                    const anchors = li.querySelectorAll('ul.list_option a.select_opt.ui_opt:not([data-init="true"])');
+                    return Array.from(anchors).map(a => {{
+                        const code = a.getAttribute('data-code') || '';
+                        const value = a.getAttribute('data-value') || '';
+                        const textEl = a.querySelector('.lt, .ui_opt_txt');
+                        const text = textEl ? textEl.textContent.trim() : a.textContent.trim();
+                        const priceEl = a.querySelector('.rt');
+                        const price_text = priceEl ? priceEl.textContent.trim() : '';
+
+                        return {{
+                            code: code,
+                            value: value,
+                            text: text,
+                            price_text: price_text
+                        }};
+                    }});
+                }}
+            """
+            )
+
+            return options or []
+        except Exception as e:
+            console.print(f"[red]옵션 가져오기 실패 ({dep_class}): {e}[/red]")
+            return []
+
+    async def _get_fuel_options(self) -> List[Dict]:
+        """연료 옵션들 가져오기"""
+        try:
+            # 연료 드롭다운 열기
+            await self._open_dropdown("fuel")
+
+            # 연료 옵션들 파싱
+            options = await self.dom.evaluate(
+                """
+                () => {
+                    const fuelLi = document.querySelector('li .select.ui_select[data-name="fuel"]');
+                    if (!fuelLi) return [];
+
+                    const li = fuelLi.closest('li');
+                    if (!li) return [];
+
+                    const anchors = li.querySelectorAll('ul.list_option a.select_opt.ui_opt:not([data-init="true"])');
+                    return Array.from(anchors).map(a => {
+                        const code = a.getAttribute('data-code') || '';
+                        const value = a.getAttribute('data-value') || '';
+                        const textEl = a.querySelector('.lt, .ui_opt_txt');
+                        const text = textEl ? textEl.textContent.trim() : a.textContent.trim();
+                        const priceEl = a.querySelector('.rt');
+                        const price_text = priceEl ? priceEl.textContent.trim() : '';
+
+                        return {
+                            code: code,
+                            value: value,
+                            text: text,
+                            price_text: price_text
+                        };
+                    });
+                }
+            """
+            )
+
+            return options or []
+        except Exception as e:
+            console.print(f"[red]연료 옵션 가져오기 실패: {e}[/red]")
+            return []
+
+    async def _open_dropdown(self, dep_class: str):
+        """드롭다운 열기"""
+        try:
+            if dep_class == "fuel":
+                # 연료는 특별한 셀렉터 사용
+                menu = await self.dom.wait_for_selector(
+                    'li .select.ui_select[data-name="fuel"] a.select_menu.ui_menu',
+                    timeout=10000,
+                )
+            else:
+                menu = await self.dom.wait_for_selector(
+                    f"li.{dep_class} a.select_menu.ui_menu", timeout=10000
+                )
+
+            if menu:
+                await menu.click()
+                await self.dom.wait_for_timeout(1000)  # 옵션 로딩 대기
+        except Exception as e:
+            console.print(f"[yellow]드롭다운 열기 실패 ({dep_class}): {e}[/yellow]")
+            # 대안: 직접 클릭 시도
+            try:
+                if dep_class == "fuel":
+                    await self.dom.click(
+                        'li .select.ui_select[data-name="fuel"] a.select_menu.ui_menu'
+                    )
+                else:
+                    await self.dom.click(f"li.{dep_class} a.select_menu.ui_menu")
+                await self.dom.wait_for_timeout(1000)
+            except Exception as e2:
+                console.print(f"[red]대안 클릭도 실패 ({dep_class}): {e2}[/red]")
+
+    async def _close_dropdown(self, dep_class: str):
+        """드롭다운 닫기 - 강제 닫기 버전"""
+        try:
+            # 페이지의 다른 영역을 클릭하여 드롭다운 강제 닫기
+            await self.dom.click("body", position={"x": 100, "y": 100})
+            await self.dom.wait_for_timeout(500)
+
+            # ESC 키로도 시도
+            await self.dom.keyboard.press("Escape")
+            await self.dom.wait_for_timeout(300)
+
+            # 페이지 제목 영역 클릭으로도 시도
+            try:
+                await self.dom.click("h1, .header, .title", timeout=1000)
+                await self.dom.wait_for_timeout(300)
+            except:
+                pass
+
+            console.print(f"[green]드롭다운 닫기 시도 완료 ({dep_class})[/green]")
+
+        except Exception as e:
+            console.print(f"[red]드롭다운 닫기 오류 ({dep_class}): {e}[/red]")
+
+    async def _select_option(self, dep_class: str, option: Dict) -> bool:
+        """옵션 선택 - 강화된 버전"""
+        try:
+            if dep_class == "fuel":
+                return await self._select_fuel_option(option)
+
+            console.print(
+                f"[blue]옵션 선택 시도: {option['text']} (코드: {option['code']})[/blue]"
+            )
+
+            # op_dep* 옵션 선택
+            await self._open_dropdown(dep_class)
+
+            # 옵션을 직접 클릭하는 방식으로 변경
+            try:
+                # data-code로 먼저 시도
+                selector = (
+                    f'li.{dep_class} a.select_opt.ui_opt[data-code="{option["code"]}"]'
+                )
+                element = await self.dom.wait_for_selector(selector, timeout=5000)
+                if element:
+                    await element.click()
+                    console.print(
+                        f"[green]옵션 선택 성공 (data-code): {option['text']}[/green]"
+                    )
+                else:
+                    # data-value로 시도
+                    selector = f'li.{dep_class} a.select_opt.ui_opt[data-value="{option["value"]}"]'
+                    element = await self.dom.wait_for_selector(selector, timeout=5000)
+                    if element:
+                        await element.click()
+                        console.print(
+                            f"[green]옵션 선택 성공 (data-value): {option['text']}[/green]"
+                        )
+                    else:
+                        console.print(f"[red]옵션을 찾을 수 없음: {option['text']}[/red]")
+                        return False
+            except Exception as e:
+                console.print(f"[red]옵션 클릭 실패: {e}[/red]")
+                return False
+
+            # 옵션 선택 후 즉시 다른 영역 클릭하여 드롭다운 닫기
+            await self.dom.wait_for_timeout(300)
+            await self.dom.click("body", position={"x": 50, "y": 50})
+            await self.dom.wait_for_timeout(1500)  # 다음 옵션 로딩 대기
+
+            return True
+        except Exception as e:
+            console.print(f"[red]옵션 선택 실패 ({dep_class}): {e}[/red]")
+            return False
+
+    async def _select_fuel_option(self, option: Dict) -> bool:
+        """연료 옵션 선택 - 강화된 버전"""
+        try:
+            console.print(
+                f"[blue]연료 옵션 선택 시도: {option['text']} (코드: {option['code']})[/blue]"
+            )
+
+            await self._open_dropdown("fuel")
+
+            # 연료 옵션을 직접 클릭하는 방식으로 변경
+            try:
+                # data-code로 먼저 시도
+                selector = f'li .select.ui_select[data-name="fuel"] a.select_opt.ui_opt[data-code="{option["code"]}"]'
+                element = await self.dom.wait_for_selector(selector, timeout=5000)
+                if element:
+                    await element.click()
+                    console.print(
+                        f"[green]연료 옵션 선택 성공 (data-code): {option['text']}[/green]"
+                    )
+                else:
+                    # data-value로 시도
+                    selector = f'li .select.ui_select[data-name="fuel"] a.select_opt.ui_opt[data-value="{option["value"]}"]'
+                    element = await self.dom.wait_for_selector(selector, timeout=5000)
+                    if element:
+                        await element.click()
+                        console.print(
+                            f"[green]연료 옵션 선택 성공 (data-value): {option['text']}[/green]"
+                        )
+                    else:
+                        console.print(f"[red]연료 옵션을 찾을 수 없음: {option['text']}[/red]")
+                        return False
+            except Exception as e:
+                console.print(f"[red]연료 옵션 클릭 실패: {e}[/red]")
+                return False
+
+            # 옵션 선택 후 즉시 다른 영역 클릭하여 드롭다운 닫기
+            await self.dom.wait_for_timeout(300)
+            await self.dom.click("body", position={"x": 50, "y": 50})
+            await self.dom.wait_for_timeout(1500)  # 다음 옵션 로딩 대기
+
+            return True
+        except Exception as e:
+            console.print(f"[red]연료 옵션 선택 실패: {e}[/red]")
+            return False
+
+    async def _get_price_info(self) -> Tuple[Optional[float], bool, str]:
+        """현재 선택된 옵션의 가격 정보 가져오기"""
+        try:
+            await self.dom.wait_for_timeout(3000)  # 가격 업데이트 대기
+
+            price_info = await self.dom.evaluate(
+                """
+                () => {
+                    // 페이지 전체 텍스트에서 가격 패턴 찾기
+                    const allText = document.body.textContent;
+
+                    // 시세 미제공 체크 먼저
+                    if (allText.includes('시세 미제공') || allText.includes('거래량이 적어')) {
+                        return {
+                            price: null,
+                            available: false,
+                            message: '시세 미제공'
+                        };
+                    }
+
+                    // 다양한 가격 패턴 시도
+                    const pricePatterns = [
+                        // "금주 시세 212 ~ 1,298만원" 패턴
+                        /금주 시세[\\s\\S]*?([0-9,]+)\\s*~\\s*([0-9,]+)\\s*만원/,
+                        // "212 ~ 1,298만원" 패턴
+                        /([0-9,]+)\\s*~\\s*([0-9,]+)\\s*만원/,
+                        // "1,298만원" 패턴
+                        /([0-9,]+)\\s*만원/,
+                        // "212만원" 패턴 (범위가 아닌 단일 가격)
+                        /([0-9,]+)\\s*만원/
+                    ];
+
+                    for (const pattern of pricePatterns) {
+                        const match = allText.match(pattern);
+                        if (match) {
+                            // 범위가 있는 경우 첫 번째 값 사용
+                            const priceStr = match[1] || match[0];
+                            const price = parseFloat(priceStr.replace(/,/g, ''));
+                            if (!isNaN(price) && price > 0) {
+                                return {
+                                    price: price,
+                                    available: true,
+                                    message: match[0]
+                                };
+                            }
+                        }
+                    }
+
+                    // 가격 표시 영역에서 직접 찾기
+                    const priceSelectors = [
+                        '.price_result .price',
+                        '.result_price .price',
+                        '.price_result',
+                        '.result_price',
+                        '[class*="price"]',
+                        '[id*="price"]',
+                        '.wrp_price .price',
+                        '.price_info .price',
+                        '.price_text',
+                        '.price_value'
+                    ];
+
+                    for (const selector of priceSelectors) {
+                        const elements = document.querySelectorAll(selector);
+                        for (const elem of elements) {
+                            const text = elem.textContent.trim();
+
+                            // 시세 미제공 체크
+                            if (text.includes('시세 미제공') || text.includes('거래량이 적어')) {
+                                return {
+                                    price: null,
+                                    available: false,
+                                    message: text
+                                };
+                            }
+
+                            // 가격 추출 (숫자와 '만원' 패턴)
+                            const priceMatch = text.match(/([0-9,]+)\\s*만원/);
+                            if (priceMatch) {
+                                const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+                                if (!isNaN(price) && price > 0) {
+                                    return {
+                                        price: price,
+                                        available: true,
+                                        message: text
+                                    };
+                                }
+                            }
+                        }
+                    }
+
+                    return {
+                        price: null,
+                        available: false,
+                        message: '가격 정보를 찾을 수 없습니다'
+                    };
+                }
+            """
+            )
+
+            return (
+                price_info.get("price"),
+                price_info.get("available", False),
+                price_info.get("message", ""),
+            )
+        except Exception as e:
+            console.print(f"[red]가격 정보 가져오기 실패: {e}[/red]")
+            return None, False, str(e)
+
+    def _create_car_data(
+        self, path: List[Dict], price: Optional[float], is_available: bool, message: str
+    ) -> Dict:
+        """차량 데이터 생성"""
+        if len(path) < 6:
+            raise ValueError("경로가 불완전합니다")
+
+        # 옵션 조합 해시 생성
+        option_string = "_".join([item.get("value", "") for item in path])
+        options_hash = hashlib.md5(option_string.encode()).hexdigest()
+
+        return {
+            "manufacturer": path[0]["text"],
+            "model": path[1]["text"],
+            "detailed_model": path[2]["text"],
+            "year": path[3]["text"],
+            "fuel_type": path[4]["text"],
+            "grade": path[5]["text"],
+            "detailed_grade": path[6]["text"] if len(path) > 6 else "",
+            "price": price,
+            "is_price_available": is_available,
+            "price_message": message,
+            "options_hash": options_hash,
+            "manufacturer_code": path[0].get("value", ""),
+            "model_code": path[1].get("value", ""),
+            "detailed_model_code": path[2].get("value", ""),
+            "year_code": path[3].get("value", ""),
+            "fuel_code": path[4].get("value", ""),
+            "grade_code": path[5].get("value", ""),
+            "detailed_grade_code": path[6].get("value", "") if len(path) > 6 else "",
+        }
+
+    async def _save_crawled_data(self) -> Tuple[int, int]:
+        """크롤링된 데이터를 DB에 저장"""
+        success_count = 0
+        failed_count = 0
+
+        for data in self.crawled_data:
+            try:
+                car_price = CarPrice(**data)
+                self.session.add(car_price)
+                self.session.commit()
+                success_count += 1
+            except Exception as e:
+                failed_count += 1
+                console.print(f"[red]DB 저장 실패: {e}[/red]")
+                self.session.rollback()
+
+        return success_count, failed_count
 
     async def test_single_combination(self):
         """단일 조합 테스트 (디버깅용)"""
@@ -833,84 +1193,57 @@ class EncarCrawler:
             # 페이지 구조 분석
             console.print("[cyan]페이지 구조 분석 중...[/cyan]")
 
-            # 모든 select 요소 찾기
-            selects = await self.dom.evaluate(
-                """
-                () => {
-                    const selects = document.querySelectorAll('select');
-                    return Array.from(selects).map(s => ({
-                        id: s.id,
-                        name: s.name,
-                        className: s.className,
-                        optionCount: s.options.length
-                    }));
-                }
-            """
-            )
+            # op_dep1~6 요소들 확인
+            for i in range(1, 7):
+                dep_class = f"op_dep{i}"
+                element = await self.dom.query_selector(f"li.{dep_class}")
+                if element:
+                    console.print(f"[green]존재: {dep_class}[/green]")
 
-            console.print("[yellow]발견된 Select 요소들:[/yellow]")
-            for select in selects:
-                console.print(
-                    f"  - ID: {select.get('id')}, Name: {select.get('name')}, Options: {select.get('optionCount')}"
-                )
+                    # 옵션 개수 확인
+                    options = await self._get_options(dep_class)
+                    console.print(f"  - 옵션 {len(options)}개")
 
-            # 제조사 관련 요소 찾기
-            manufacturer_selectors = [
-                'select[id*="manufacturer"]',
-                'select[id*="maker"]',
-                'select[id*="brand"]',
-                "li.op_dep1 .select.ui_select",
-                'select[name*="manufacturer"]',
-                'select[name*="maker"]',
-                ".wrp_price select:first-child",
-            ]
+                    # 처음 3개 옵션 표시
+                    for opt in options[:3]:
+                        price_text = opt.get("price_text", "")
+                        console.print(f"    • {opt['text']} - {price_text}")
+                else:
+                    console.print(f"[yellow]없음: {dep_class}[/yellow]")
 
-            manufacturer_element = None
-            for selector in manufacturer_selectors:
-                try:
-                    element = await self.dom.query_selector(selector)
-                    if element:
-                        console.print(f"[green]제조사 셀렉터 발견: {selector}[/green]")
-                        manufacturer_element = selector
-                        break
-                except:
-                    pass
+            # 연료 옵션 확인
+            fuel_options = await self._get_fuel_options()
+            console.print(f"[green]연료 옵션 {len(fuel_options)}개 발견[/green]")
+            for opt in fuel_options[:3]:
+                price_text = opt.get("price_text", "")
+                console.print(f"  • {opt['text']} - {price_text}")
 
-            if not manufacturer_element:
-                console.print("[red]제조사 셀렉터를 찾을 수 없습니다.[/red]")
-
-                # HTML 구조 출력 (디버깅용)
-                html_snippet = await self.dom.evaluate(
-                    """
-                    () => {
-                        const priceWrapper = document.querySelector('.wrp_price');
-                        if (priceWrapper) {
-                            return priceWrapper.innerHTML.substring(0, 500);
-                        }
-                        return document.body.innerHTML.substring(0, 500);
-                    }
-                """
-                )
-                console.print(f"[dim]HTML 일부: {html_snippet}[/dim]")
-                return
+            # 간단한 크롤링 테스트
+            console.print("\n[cyan]간단한 크롤링 테스트 시작...[/cyan]")
 
             # 제조사 옵션 가져오기
-            options = await self.dom.evaluate(
-                f"""
-                () => {{
-                    const select = document.querySelector('{manufacturer_element}');
-                    if (!select) return [];
-                    return Array.from(select.options).map(opt => ({{
-                        value: opt.value,
-                        text: opt.text
-                    }}));
-                }}
-            """
-            )
+            manufacturers = await self._get_options("op_dep1")
+            if manufacturers:
+                # 첫 번째 제조사 선택
+                first_manufacturer = manufacturers[0]
+                console.print(f"[cyan]첫 번째 제조사 선택: {first_manufacturer['text']}[/cyan]")
 
-            console.print(f"[green]제조사 옵션 {len(options)}개 발견[/green]")
-            for opt in options[:5]:  # 처음 5개만 표시
-                console.print(f"  - {opt['text']} ({opt['value']})")
+                if await self._select_option("op_dep1", first_manufacturer):
+                    # 모델 옵션 가져오기
+                    models = await self._get_options("op_dep2")
+                    console.print(f"[green]모델 {len(models)}개 발견[/green]")
+
+                    if models:
+                        first_model = models[0]
+                        console.print(f"[cyan]첫 번째 모델 선택: {first_model['text']}[/cyan]")
+
+                        if await self._select_option("op_dep2", first_model):
+                            # 가격 정보 확인
+                            price, is_available, message = await self._get_price_info()
+                            console.print(
+                                f"[green]가격 정보: {price}만원 (제공: {is_available})[/green]"
+                            )
+                            console.print(f"[green]메시지: {message}[/green]")
 
         except Exception as e:
             console.print(f"[red]테스트 실패: {e}[/red]")
