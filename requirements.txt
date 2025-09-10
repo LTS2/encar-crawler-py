@@ -1,0 +1,14 @@
+playwright==1.41.0
+beautifulsoup4==4.12.3
+sqlalchemy==2.0.25
+pymysql==1.1.0
+python-dotenv==1.0.0
+lxml==5.1.0
+rich==13.7.0
+tenacity==8.2.3
+
+# Linting and formatting tools
+black==23.12.1
+flake8==7.0.0
+isort==5.13.2
+pre-commit==3.6.0
